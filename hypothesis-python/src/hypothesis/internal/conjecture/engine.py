@@ -428,6 +428,7 @@ class ConjectureRunner:
             interrupted = True
             raise
         except BackendCannotProceed as exc:
+            data.status = Status.INVALID
             if exc.scope in ("verified", "exhausted"):
                 self._switch_to_hypothesis_provider = True
                 if exc.scope == "verified":
