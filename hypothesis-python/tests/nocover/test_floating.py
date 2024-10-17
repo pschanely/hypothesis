@@ -93,7 +93,6 @@ def test_is_not_int(x):
     assert x != int(x)
 
 
-@xfail_on_crosshair(Why.undiscovered)
 @fails
 @given(floats())
 @TRY_HARDER

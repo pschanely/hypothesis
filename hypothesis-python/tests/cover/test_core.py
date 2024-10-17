@@ -20,7 +20,6 @@ from hypothesis.errors import InvalidArgument, NoSuchExample, Unsatisfiable
 from tests.common.utils import Why, xfail_on_crosshair
 
 
-@xfail_on_crosshair(Why.other)
 def test_stops_after_max_examples_if_satisfying():
     tracker = []
 
