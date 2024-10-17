@@ -182,7 +182,6 @@ def test_rewrite_unsatisfiable_filter(s, pred):
     assert s.filter(pred).is_empty
 
 
-@xfail_on_crosshair(Why.undiscovered)
 @pytest.mark.parametrize(
     "pred",
     [
@@ -376,7 +375,6 @@ def test_isidentifier_filter_properly_rewritten(al, data):
     assert example.isidentifier()
 
 
-@xfail_on_crosshair(Why.no_unsatisfiable)  # maybe a bug?
 def test_isidentifer_filter_unsatisfiable():
     alphabet = "¥¦§©"
     assert not any(f"_{c}".isidentifier() for c in alphabet)
@@ -575,7 +573,6 @@ def test_filter_rewriting_lambda_len_unique_elements(
     assert predicate(value)
 
 
-@xfail_on_crosshair(Why.no_unsatisfiable)
 @pytest.mark.parametrize(
     "predicate",
     [
