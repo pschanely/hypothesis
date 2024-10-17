@@ -58,6 +58,8 @@ from hypothesis.internal.conjecture.engine import (
 )
 from hypothesis.internal.conjecture.shrinker import sort_key_ir
 
+from tests.common.utils import Why, xfail_on_crosshair
+
 T = TypeVar("T")
 
 
@@ -149,6 +151,7 @@ def test_strategy_list_is_in_sorted_order():
     )
 
 
+@xfail_on_crosshair(Why.other, strict=False)  # Does not setup crosshair's context manager
 @pytest.mark.parametrize("typ,strat", common_strategies_with_types)
 @pytest.mark.parametrize("require_truthy", [False, True])
 def test_can_precisely_shrink_values(typ, strat, require_truthy):
@@ -297,6 +300,7 @@ def test_always_shrinks_to_none(a, seed, block_falsey, allow_sloppy):
     assert shrunk_values[0][1] is None
 
 
+@xfail_on_crosshair(Why.other, strict=False)  # Does not setup the provider's per_test_case_context_manager
 @pytest.mark.parametrize(
     "i,alts", [(i, alt) for alt in alternatives for i in range(1, len(alt))]
 )

@@ -101,7 +101,6 @@ def test_flag_enum_repr_uses_class_not_a_list():
     assert lazy_repr == "sampled_from(tests.nocover.test_sampled_from.AFlag)"
 
 
-@xfail_on_crosshair(Why.undiscovered)
 def test_exhaustive_flags():
     # Generate powerset of flag combinations. There are only 2^3 of them, so
     # we can reasonably expect that they are all are found.
@@ -131,6 +130,7 @@ def test_flags_minimizes_bit_count():
     )
 
 
+@xfail_on_crosshair(Why.undiscovered)  # (large path tree; search has fewer heuristics than hypothesis)
 def test_flags_finds_all_bits_set():
     assert find_any(st.sampled_from(LargeFlag), lambda f: f == ~LargeFlag(0))
 

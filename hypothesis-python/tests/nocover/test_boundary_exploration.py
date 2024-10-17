@@ -16,9 +16,12 @@ from hypothesis.errors import Unsatisfiable
 from tests.common.debug import minimal
 from tests.common.utils import no_shrink
 
+from tests.common.utils import Why, xfail_on_crosshair
+
 
 @pytest.mark.parametrize("strat", [st.text(min_size=5)])
 @settings(phases=no_shrink, deadline=None, suppress_health_check=list(HealthCheck))
+@xfail_on_crosshair(Why.symbolic_outside_context)
 @given(st.data())
 def test_explore_arbitrary_function(strat, data):
     cache = {}

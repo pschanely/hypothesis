@@ -69,7 +69,6 @@ def test_can_map():
     assert_simple_property(s, lambda v: v == "foo")
 
 
-@xfail_on_crosshair(Why.no_unsatisfiable)
 def test_example_raises_unsatisfiable_when_too_filtered():
     with pytest.raises(Unsatisfiable):
         check_can_generate_examples(integers().filter(lambda x: False))

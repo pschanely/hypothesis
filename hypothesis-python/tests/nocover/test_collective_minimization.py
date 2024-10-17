@@ -19,7 +19,6 @@ from tests.common.debug import minimal
 from tests.common.utils import Why, xfail_on_crosshair
 
 
-@xfail_on_crosshair(Why.floats, strict=False)
 @pytest.mark.parametrize("spec", standard_types, ids=repr)
 def test_can_collectively_minimize(spec):
     n = 10

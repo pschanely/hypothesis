@@ -32,7 +32,6 @@ def has_a_non_zero_byte(x):
     return any(bytes(x))
 
 
-@xfail_on_crosshair(Why.undiscovered)
 def test_saves_incremental_steps_in_database():
     key = b"a database key"
     database = InMemoryExampleDatabase()
@@ -78,7 +77,6 @@ def test_clears_out_database_as_things_get_boring():
         raise AssertionError
 
 
-@xfail_on_crosshair(Why.other, strict=False)
 def test_trashes_invalid_examples():
     key = b"a database key"
     database = InMemoryExampleDatabase()

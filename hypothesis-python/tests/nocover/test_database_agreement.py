@@ -12,7 +12,9 @@ import os
 import shutil
 import tempfile
 
-from hypothesis import strategies as st
+import pytest
+
+from hypothesis import settings, strategies as st
 from hypothesis.database import (
     BackgroundWriteDatabase,
     DirectoryBasedExampleDatabase,
@@ -75,4 +77,4 @@ class DatabaseComparison(RuleBasedStateMachine):
         shutil.rmtree(self.tempd)
 
 
-TestDBs = DatabaseComparison.TestCase
+TestDBs = pytest.mark.skipif(settings._current_profile == "crosshair", reason="symbolic accessed from thread")(DatabaseComparison.TestCase)

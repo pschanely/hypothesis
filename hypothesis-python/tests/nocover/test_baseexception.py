@@ -72,6 +72,7 @@ def test_baseexception_no_rerun_no_flaky(e):
             test_raise_baseexception()
 
 
+@xfail_on_crosshair(Why.other, strict=False)  # crosshair nondeterminism triggered before we even know that it's flaky
 @pytest.mark.parametrize(
     "e", [KeyboardInterrupt, SystemExit, GeneratorExit, ValueError]
 )

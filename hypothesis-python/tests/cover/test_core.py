@@ -20,7 +20,6 @@ from hypothesis.errors import InvalidArgument, NoSuchExample, Unsatisfiable
 from tests.common.utils import Why, xfail_on_crosshair
 
 
-@xfail_on_crosshair(Why.other)
 def test_stops_after_max_examples_if_satisfying():
     tracker = []
 
@@ -36,7 +35,7 @@ def test_stops_after_max_examples_if_satisfying():
     assert len(tracker) == max_examples
 
 
-@xfail_on_crosshair(Why.symbolic_outside_context)
+@xfail_on_crosshair(Why.symbolic_outside_context, strict=False)
 def test_stops_after_ten_times_max_examples_if_not_satisfying():
     count = 0
 
