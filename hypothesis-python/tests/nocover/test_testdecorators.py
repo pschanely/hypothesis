@@ -18,7 +18,6 @@ from hypothesis.errors import InvalidArgument, Unsatisfiable
 from tests.common.utils import Why, xfail_on_crosshair
 
 
-@xfail_on_crosshair(Why.no_unsatisfiable)
 def test_contains_the_test_function_name_in_the_exception_string():
     look_for_one = settings(max_examples=1, suppress_health_check=list(HealthCheck))
 

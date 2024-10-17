@@ -101,7 +101,6 @@ def test_flag_enum_repr_uses_class_not_a_list():
     assert lazy_repr == "sampled_from(tests.nocover.test_sampled_from.AFlag)"
 
 
-@xfail_on_crosshair(Why.undiscovered)
 def test_exhaustive_flags():
     # Generate powerset of flag combinations. There are only 2^3 of them, so
     # we can reasonably expect that they are all are found.
