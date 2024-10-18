@@ -432,6 +432,7 @@ class ConjectureRunner:
                 self._switch_to_hypothesis_provider = True
                 if exc.scope == "verified":
                     self._verified_by = self.settings.backend
+                    data.status = Status.INVALID
             elif exc.scope == "discard_test_case":
                 self.__failed_realize_count += 1
                 if (
