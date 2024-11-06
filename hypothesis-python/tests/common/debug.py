@@ -63,6 +63,9 @@ def minimal(definition, condition=lambda x: True, settings=None):
     try:
         inner()
     except Found:
+        # print("FOUND")
+        # import traceback
+        # traceback.print_exc()
         return result
     raise Unsatisfiable(
         "Could not find any examples from %r that satisfied %s"

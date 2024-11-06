@@ -1698,6 +1698,7 @@ def given(
                     # Using a variable for our trimmed error ensures that the line
                     # which will actually appear in tracebacks is as clear as
                     # possible - "raise the_error_hypothesis_found".
+                    # the_error_hypothesis_found = e
                     the_error_hypothesis_found = e.with_traceback(
                         None
                         if isinstance(e, BaseExceptionGroup)

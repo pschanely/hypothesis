@@ -482,7 +482,7 @@ def test_empty_lists(xs):
     assert xs == []
 
 
-@xfail_on_crosshair(Why.other, strict=False)
+@xfail_on_crosshair(Why.escaped_symbolic, strict=False)
 def test_given_usable_inline_on_lambdas():
     xs = []
     given(booleans())(lambda x: xs.append(x))()
