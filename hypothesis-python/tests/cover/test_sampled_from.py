@@ -62,6 +62,7 @@ def test_can_sample_enums(enum_class):
     assert_all_examples(sampled_from(enum_class), lambda x: isinstance(x, enum_class))
 
 
+@xfail_on_crosshair(Why.unrecoverable_unsatisfiable)
 @fails_with(FailedHealthCheck)
 @settings(suppress_health_check=[])
 @given(sampled_from(range(10)).filter(lambda x: x < 0))
@@ -69,7 +70,7 @@ def test_unsat_filtered_sampling(x):
     raise AssertionError
 
 
-@xfail_on_crosshair(Why.no_unsatisfiable)
+@xfail_on_crosshair(Why.unrecoverable_unsatisfiable)
 @fails_with(Unsatisfiable)
 @settings(suppress_health_check=[])
 @given(sampled_from(range(2)).filter(lambda x: x < 0))

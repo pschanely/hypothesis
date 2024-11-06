@@ -29,6 +29,7 @@ from hypothesis.strategies import (
 )
 
 from tests.common.debug import check_can_generate_examples, find_any
+from tests.common.utils import Why, xfail_on_crosshair
 
 
 @settings(suppress_health_check=list(HealthCheck))
@@ -66,6 +67,7 @@ def test_fuzz_floats_bounds(data):
         assert high != val
 
 
+@xfail_on_crosshair(Why.unhandled_backend_cannot_proceed, strict=False)
 @given(data())
 def test_fuzz_fractions_bounds(data):
     denom = data.draw(none() | integers(1, 100), label="denominator")

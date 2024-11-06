@@ -265,6 +265,9 @@ class Why(enum.Enum):
 
     # nested_given: https://github.com/pschanely/hypothesis-crosshair/issues/11
     nested_given = "nested @given decorators don't work with crosshair"
+    escaped_symbolic = "test lets symbolics escape the context"
+    unrecoverable_unsatisfiable = "after giving up on crosshair, hypothesis can no longer produce Unsatisfiable (b/c it can't get to exhaustion?)"
+    unhandled_backend_cannot_proceed = "BackendCannotProceed exception raised to the top level of the test"
     undiscovered = "crosshair may not find the failing input"
     other = "reasons not elsewhere categorized"
 

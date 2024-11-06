@@ -40,7 +40,6 @@ def test_to_bytes_in_big_endian_order(x, y):
     assert int_to_bytes(x, 8) <= int_to_bytes(y, 8)
 
 
-@xfail_on_crosshair(Why.other)
 @given(st.fractions())
 def test_ceil(x):
     assert isinstance(ceil(x), int)
@@ -48,7 +47,6 @@ def test_ceil(x):
     assert ceil(x) == math.ceil(x)
 
 
-@xfail_on_crosshair(Why.other)
 @given(st.fractions())
 def test_floor(x):
     assert isinstance(floor(x), int)
