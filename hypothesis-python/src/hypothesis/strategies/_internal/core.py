@@ -36,6 +36,7 @@ from typing import (
     Protocol,
     TypeVar,
     Union,
+    cast,
     get_args,
     get_origin,
     overload,
@@ -63,6 +64,8 @@ from hypothesis.errors import (
 )
 from hypothesis.internal.cathetus import cathetus
 from hypothesis.internal.charmap import (
+    Categories,
+    CategoryName,
     as_general_categories,
     categories as all_categories,
 )
@@ -82,7 +85,6 @@ from hypothesis.internal.conjecture.utils import (
 )
 from hypothesis.internal.entropy import get_seeder_and_restorer
 from hypothesis.internal.floats import float_of
-from hypothesis.internal.observability import TESTCASE_CALLBACKS
 from hypothesis.internal.reflection import (
     define_function_signature,
     get_pretty_function_description,
@@ -136,21 +138,15 @@ from hypothesis.strategies._internal.strings import (
     TextStrategy,
     _check_is_single_character,
 )
-from hypothesis.strategies._internal.utils import (
-    cacheable,
-    defines_strategy,
-    to_jsonable,
-)
+from hypothesis.strategies._internal.utils import cacheable, defines_strategy
 from hypothesis.utils.conventions import not_set
 from hypothesis.vendor.pretty import RepresentationPrinter
 
 if sys.version_info >= (3, 10):
     from types import EllipsisType as EllipsisType
-    from typing import TypeAlias as TypeAlias
 elif typing.TYPE_CHECKING:  # pragma: no cover
     from builtins import ellipsis as EllipsisType
 
-    from typing_extensions import TypeAlias
 else:
     EllipsisType = type(Ellipsis)  # pragma: no cover
 
@@ -345,12 +341,16 @@ def lists(
             and len(unique_by) == 1
             and (
                 # Introspection for either `itemgetter(0)`, or `lambda x: x[0]`
-                isinstance(unique_by[0], operator.itemgetter)
-                and repr(unique_by[0]) == "operator.itemgetter(0)"
-                or isinstance(unique_by[0], FunctionType)
-                and re.fullmatch(
-                    get_pretty_function_description(unique_by[0]),
-                    r"lambda ([a-z]+): \1\[0\]",
+                (
+                    isinstance(unique_by[0], operator.itemgetter)
+                    and repr(unique_by[0]) == "operator.itemgetter(0)"
+                )
+                or (
+                    isinstance(unique_by[0], FunctionType)
+                    and re.fullmatch(
+                        get_pretty_function_description(unique_by[0]),
+                        r"lambda ([a-z]+): \1\[0\]",
+                    )
                 )
             )
         ):
@@ -560,48 +560,6 @@ def dictionaries(
     ).map(dict_class)
 
 
-# See https://en.wikipedia.org/wiki/Unicode_character_property#General_Category
-CategoryName: "TypeAlias" = Literal[
-    "L",  #  Letter
-    "Lu",  # Letter, uppercase
-    "Ll",  # Letter, lowercase
-    "Lt",  # Letter, titlecase
-    "Lm",  # Letter, modifier
-    "Lo",  # Letter, other
-    "M",  #  Mark
-    "Mn",  # Mark, nonspacing
-    "Mc",  # Mark, spacing combining
-    "Me",  # Mark, enclosing
-    "N",  #  Number
-    "Nd",  # Number, decimal digit
-    "Nl",  # Number, letter
-    "No",  # Number, other
-    "P",  #  Punctuation
-    "Pc",  # Punctuation, connector
-    "Pd",  # Punctuation, dash
-    "Ps",  # Punctuation, open
-    "Pe",  # Punctuation, close
-    "Pi",  # Punctuation, initial quote
-    "Pf",  # Punctuation, final quote
-    "Po",  # Punctuation, other
-    "S",  #  Symbol
-    "Sm",  # Symbol, math
-    "Sc",  # Symbol, currency
-    "Sk",  # Symbol, modifier
-    "So",  # Symbol, other
-    "Z",  #  Separator
-    "Zs",  # Separator, space
-    "Zl",  # Separator, line
-    "Zp",  # Separator, paragraph
-    "C",  #  Other
-    "Cc",  # Other, control
-    "Cf",  # Other, format
-    "Cs",  # Other, surrogate
-    "Co",  # Other, private use
-    "Cn",  # Other, not assigned
-]
-
-
 @cacheable
 @defines_strategy(force_reusable_values=True)
 def characters(
@@ -660,7 +618,7 @@ def characters(
     explicitly allowed, the ``codec`` argument will exclude them without
     raising an exception.
 
-    .. _general category: https://wikipedia.org/wiki/Unicode_character_property
+    .. _general category: https://en.wikipedia.org/wiki/Unicode_character_property
     .. _codec encodings: https://docs.python.org/3/library/codecs.html#encodings-and-unicode
     .. _python-specific text encodings: https://docs.python.org/3/library/codecs.html#python-specific-encodings
 
@@ -670,7 +628,7 @@ def characters(
     check_valid_size(min_codepoint, "min_codepoint")
     check_valid_size(max_codepoint, "max_codepoint")
     check_valid_interval(min_codepoint, max_codepoint, "min_codepoint", "max_codepoint")
-
+    categories = cast(Optional[Categories], categories)
     if categories is not None and exclude_categories is not None:
         raise InvalidArgument(
             f"Pass at most one of {categories=} and {exclude_categories=} - "
@@ -717,8 +675,12 @@ def characters(
             f"Characters {sorted(overlap)!r} are present in both "
             f"{include_characters=} and {exclude_characters=}"
         )
-    categories = as_general_categories(categories, "categories")
-    exclude_categories = as_general_categories(exclude_categories, "exclude_categories")
+    if categories is not None:
+        categories = as_general_categories(categories, "categories")
+    if exclude_categories is not None:
+        exclude_categories = as_general_categories(
+            exclude_categories, "exclude_categories"
+        )
     if categories is not None and not categories and not include_characters:
         raise InvalidArgument(
             "When `categories` is an empty collection and there are "
@@ -830,6 +792,19 @@ def text(
             raise InvalidArgument(
                 "The following elements in alphabet are not of length one, "
                 f"which leads to violation of size constraints:  {not_one_char!r}"
+            )
+        if alphabet in ["ascii", "utf-8"]:
+            warnings.warn(
+                f"st.text({alphabet!r}): it seems like you are trying to use the "
+                f"codec {alphabet!r}. st.text({alphabet!r}) instead generates "
+                f"strings using the literal characters {list(alphabet)!r}. To specify "
+                f"the {alphabet} codec, use st.text(st.characters(codec={alphabet!r})). "
+                "If you intended to use character literals, you can silence this "
+                "warning by reordering the characters.",
+                HypothesisWarning,
+                # this stacklevel is of course incorrect, but breaking out of the
+                # levels of LazyStrategy and validation isn't worthwhile.
+                stacklevel=1,
             )
         char_strategy = (
             characters(categories=(), include_characters=alphabet)
@@ -1341,10 +1316,8 @@ def _from_type(thing: type[Ex]) -> SearchStrategy[Ex]:
         # We've kept it because we turn out to have more type errors from... somewhere.
         # FIXME: investigate that, maybe it should be fixed more precisely?
         pass
-    if (
-        hasattr(typing, "_TypedDictMeta")
-        and type(thing) is typing._TypedDictMeta
-        or hasattr(types.typing_extensions, "_TypedDictMeta")  # type: ignore
+    if (hasattr(typing, "_TypedDictMeta") and type(thing) is typing._TypedDictMeta) or (
+        hasattr(types.typing_extensions, "_TypedDictMeta")  # type: ignore
         and type(thing) is types.typing_extensions._TypedDictMeta  # type: ignore
     ):  # pragma: no cover
 
@@ -1474,17 +1447,35 @@ def _from_type(thing: type[Ex]) -> SearchStrategy[Ex]:
             params = get_signature(thing).parameters
         except Exception:
             params = {}  # type: ignore
+
+        posonly_args = []
         kwargs = {}
         for k, p in params.items():
             if (
-                k in hints
+                p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                and k in hints
                 and k != "return"
-                and p.kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
             ):
-                kwargs[k] = from_type_guarded(hints[k])
-                if p.default is not Parameter.empty and kwargs[k] is not ...:
-                    kwargs[k] = just(p.default) | kwargs[k]
-        if params and not kwargs and not issubclass(thing, BaseException):
+                ps = from_type_guarded(hints[k])
+                if p.default is not Parameter.empty and ps is not ...:
+                    ps = just(p.default) | ps
+                if p.kind is Parameter.POSITIONAL_ONLY:
+                    # builds() doesn't infer strategies for positional args, so:
+                    if ps is ...:  # pragma: no cover  # rather fiddly to test
+                        if p.default is Parameter.empty:
+                            raise ResolutionFailed(
+                                f"Could not resolve {thing!r} to a strategy; "
+                                "consider using register_type_strategy"
+                            )
+                        ps = just(p.default)
+                    posonly_args.append(ps)
+                else:
+                    kwargs[k] = ps
+        if (
+            params
+            and not (posonly_args or kwargs)
+            and not issubclass(thing, BaseException)
+        ):
             from_type_repr = repr_call(from_type, (thing,), {})
             builds_repr = repr_call(builds, (thing,), {})
             warnings.warn(
@@ -1495,7 +1486,7 @@ def _from_type(thing: type[Ex]) -> SearchStrategy[Ex]:
                 SmallSearchSpaceWarning,
                 stacklevel=2,
             )
-        return builds(thing, **kwargs)
+        return builds(thing, *posonly_args, **kwargs)
     # And if it's an abstract type, we'll resolve to a union of subclasses instead.
     subclasses = thing.__subclasses__()
     if not subclasses:
@@ -2155,16 +2146,14 @@ class DataObject:
     def draw(self, strategy: SearchStrategy[Ex], label: Any = None) -> Ex:
         check_strategy(strategy, "strategy")
         self.count += 1
-        printer = RepresentationPrinter(context=current_build_context())
-        desc = f"Draw {self.count}{'' if label is None else f' ({label})'}: "
+        desc = f"Draw {self.count}{'' if label is None else f' ({label})'}"
         with deprecate_random_in_strategy("{}from {!r}", desc, strategy):
             result = self.conjecture_data.draw(strategy, observe_as=f"generate:{desc}")
-        if TESTCASE_CALLBACKS:
-            self.conjecture_data._observability_args[desc] = to_jsonable(result)
 
         # optimization to avoid needless printer.pretty
         if should_note():
-            printer.text(desc)
+            printer = RepresentationPrinter(context=current_build_context())
+            printer.text(f"{desc}: ")
             printer.pretty(result)
             note(printer.getvalue())
         return result

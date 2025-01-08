@@ -21,20 +21,27 @@ from typing import Optional
 
 import pytest
 
-from hypothesis import configuration, given, settings, strategies as st
+from hypothesis import configuration, example, given, settings, strategies as st
 from hypothesis.database import (
+    BackgroundWriteDatabase,
     DirectoryBasedExampleDatabase,
     ExampleDatabase,
     GitHubArtifactDatabase,
     InMemoryExampleDatabase,
     MultiplexedDatabase,
     ReadOnlyDatabase,
+    ir_from_bytes,
+    ir_to_bytes,
 )
 from hypothesis.errors import HypothesisWarning
 from hypothesis.internal.compat import WINDOWS
+from hypothesis.internal.conjecture.data import ir_value_equal
 from hypothesis.stateful import Bundle, RuleBasedStateMachine, rule
 from hypothesis.strategies import binary, lists, tuples
 from hypothesis.utils.conventions import not_set
+
+from tests.common.utils import skipif_emscripten
+from tests.conjecture.common import ir, ir_nodes
 
 small_settings = settings(max_examples=50)
 
@@ -444,3 +451,44 @@ def test_database_directory_inaccessible(dirs, tmp_path, monkeypatch):
     ):
         database = ExampleDatabase(not_set)
     database.save(b"fizz", b"buzz")
+
+
+@skipif_emscripten
+def test_background_write_database():
+    db = BackgroundWriteDatabase(InMemoryExampleDatabase())
+    db.save(b"a", b"b")
+    db.save(b"a", b"c")
+    db.save(b"a", b"d")
+    assert set(db.fetch(b"a")) == {b"b", b"c", b"d"}
+
+    db.move(b"a", b"a2", b"b")
+    assert set(db.fetch(b"a")) == {b"c", b"d"}
+    assert set(db.fetch(b"a2")) == {b"b"}
+
+    db.delete(b"a", b"c")
+    assert set(db.fetch(b"a")) == {b"d"}
+
+
+@given(lists(ir_nodes()))
+# covering examples
+@example(ir(True))
+@example(ir(1))
+@example(ir(0.0))
+@example(ir(-0.0))
+@example(ir("a"))
+@example(ir(b"a"))
+@example(ir(b"a" * 50))
+def test_ir_nodes_rountrips(nodes1):
+    s1 = ir_to_bytes([n.value for n in nodes1])
+    assert isinstance(s1, bytes)
+    ir2 = ir_from_bytes(s1)
+    assert len(nodes1) == len(ir2)
+
+    for n1, v2 in zip(nodes1, ir2):
+        v1 = n1.value
+        ir_type = n1.ir_type
+        assert type(v1) is type(v2)
+        assert ir_value_equal(ir_type, v1, v2)
+
+    s2 = ir_to_bytes(ir2)
+    assert s1 == s2

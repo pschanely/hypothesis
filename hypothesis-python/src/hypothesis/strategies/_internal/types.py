@@ -822,9 +822,7 @@ def register(type_, fallback=None, *, module=typing):
 @register("Type")
 @register("Type", module=typing_extensions)
 def resolve_Type(thing):
-    if getattr(thing, "__args__", None) is None:
-        return st.just(type)
-    elif get_args(thing) == ():  # pragma: no cover
+    if getattr(thing, "__args__", None) is None or get_args(thing) == ():
         return _fallback_type_strategy
     args = (thing.__args__[0],)
     if is_a_union(args[0]):
@@ -1032,6 +1030,9 @@ def resolve_Callable(thing):
             f"are PEP-647 TypeGuards or PEP-742 TypeIs (got {return_type!r}).  "
             "Consider using an explicit strategy, or opening an issue."
         )
+
+    if get_origin(thing) is collections.abc.Callable and return_type is None:
+        return_type = type(None)
 
     return st.functions(
         like=(lambda *a, **k: None) if args_types else (lambda: None),

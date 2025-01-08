@@ -48,9 +48,9 @@ jobs:
           # - check-py313t-cover
           # - check-py313t-nocover
           # - check-py313t-niche
-          - check-py314-cover
-          - check-py314-nocover
-          - check-py314-niche
+          # - check-py314-cover
+          # - check-py314-nocover
+          # - check-py314-niche
           # - check-py314t-cover
           # - check-py314t-nocover
           # - check-py314t-niche
@@ -69,6 +69,7 @@ jobs:
           - check-py39-pytest46
           - check-py39-pytest54
           - check-pytest62
+          - check-django51
           - check-django50
           - check-django42
           - check-pandas22
@@ -77,8 +78,9 @@ jobs:
           - check-pandas15
           - check-pandas14
           - check-pandas13
-          - check-py39-pandas12
-          - check-py39-pandas11
+          ## FIXME: actions update means Python builds without eg _bz2, which was required
+          # - check-py39-pandas12
+          # - check-py39-pandas11
           ## `-cover` is too slow under crosshair; use a custom split
           - check-crosshair-custom-cover/test_[a-d]*
           - check-crosshair-custom-cover/test_[e-i]*
@@ -228,8 +230,8 @@ jobs:
       NODE_VERSION: 18
       # Note that the versions below must be updated in sync; we've automated
       # that with `update_pyodide_versions()` in our weekly cronjob.
-      PYODIDE_VERSION: 0.26.2
-      PYTHON_VERSION: 3.12.1
+      PYODIDE_VERSION: 0.27.0
+      PYTHON_VERSION: 3.12.7
       EMSCRIPTEN_VERSION: 3.1.58
     steps:
       - uses: actions/checkout@v3
@@ -247,7 +249,6 @@ jobs:
         uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
         with:
           version: ${{ env.EMSCRIPTEN_VERSION }}
-          actions-cache-folder: emsdk-cache
       - name: Build
         run: |
           pip install pyodide-build==$PYODIDE_VERSION

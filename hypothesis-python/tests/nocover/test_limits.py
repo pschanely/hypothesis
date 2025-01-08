@@ -15,12 +15,13 @@ from tests.common.utils import Why, xfail_on_crosshair
 
 @xfail_on_crosshair(Why.other, strict=False)  # might run fewer
 def test_max_examples_are_respected():
-    counter = [0]
+    counter = 0
 
     @given(st.random_module(), st.integers())
     @settings(max_examples=100)
     def test(rnd, i):
-        counter[0] += 1
+        nonlocal counter
+        counter += 1
 
     test()
-    assert counter == [100]
+    assert counter == 100

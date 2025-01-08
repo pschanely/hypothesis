@@ -27,13 +27,26 @@ from typing import (
     TypedDict,
     TypeVar,
     Union,
+    cast,
 )
 
 import attr
 
-from hypothesis.errors import Frozen, InvalidArgument, StopTest
+from hypothesis.errors import ChoiceTooLarge, Frozen, InvalidArgument, StopTest
 from hypothesis.internal.cache import LRUCache
 from hypothesis.internal.compat import add_note, floor, int_from_bytes, int_to_bytes
+from hypothesis.internal.conjecture.choice import (
+    BooleanKWargs,
+    BytesKWargs,
+    ChoiceKwargsT,
+    ChoiceNameT,
+    ChoiceT,
+    FloatKWargs,
+    IntegerKWargs,
+    StringKWargs,
+    choice_from_index,
+    choice_permitted,
+)
 from hypothesis.internal.conjecture.floats import float_to_lex, lex_to_float
 from hypothesis.internal.conjecture.junkdrawer import (
     IntList,
@@ -47,6 +60,7 @@ from hypothesis.internal.conjecture.utils import (
     calc_label_from_name,
     many,
 )
+from hypothesis.internal.escalation import InterestingOrigin
 from hypothesis.internal.floats import (
     SIGNALING_NAN,
     SMALLEST_SUBNORMAL,
@@ -58,6 +72,7 @@ from hypothesis.internal.floats import (
     sign_aware_lte,
 )
 from hypothesis.internal.intervalsets import IntervalSet
+from hypothesis.reporting import debug_report
 
 if TYPE_CHECKING:
     from typing import TypeAlias
@@ -77,50 +92,12 @@ else:
 
 
 TOP_LABEL = calc_label_from_name("top")
-InterestingOrigin = tuple[
-    type[BaseException], str, int, tuple[Any, ...], tuple[tuple[Any, ...], ...]
-]
 TargetObservations = dict[str, Union[int, float]]
 
 T = TypeVar("T")
 
-
-class IntegerKWargs(TypedDict):
-    min_value: Optional[int]
-    max_value: Optional[int]
-    weights: Optional[Sequence[float]]
-    shrink_towards: int
-
-
-class FloatKWargs(TypedDict):
-    min_value: float
-    max_value: float
-    allow_nan: bool
-    smallest_nonzero_magnitude: float
-
-
-class StringKWargs(TypedDict):
-    intervals: IntervalSet
-    min_size: int
-    max_size: int
-
-
-class BytesKWargs(TypedDict):
-    min_size: int
-    max_size: int
-
-
-class BooleanKWargs(TypedDict):
-    p: float
-
-
-IRType: TypeAlias = Union[int, str, bool, float, bytes]
-IRKWargsType: TypeAlias = Union[
-    IntegerKWargs, FloatKWargs, StringKWargs, BytesKWargs, BooleanKWargs
-]
-IRTypeName: TypeAlias = Literal["integer", "string", "boolean", "float", "bytes"]
 # index, ir_type, kwargs, forced
-MisalignedAt: TypeAlias = tuple[int, IRTypeName, IRKWargsType, Optional[IRType]]
+MisalignedAt: TypeAlias = tuple[int, ChoiceNameT, ChoiceKwargsT, Optional[ChoiceT]]
 
 
 class ExtraInformation:
@@ -231,7 +208,7 @@ class Example:
     often dramatically reduce our memory usage, so is worth it.
     """
 
-    __slots__ = ("owner", "index")
+    __slots__ = ("index", "owner")
 
     def __init__(self, owner: "Examples", index: int) -> None:
         self.owner = owner
@@ -356,8 +333,6 @@ class ExampleProperty:
                 self.block(self.block_count)
                 self.block_count += 1
             elif record == IR_NODE_RECORD:
-                data = self.examples.ir_nodes[self.ir_node_count]
-                self.ir_node(data)
                 self.ir_node_count += 1
             elif record >= START_EXAMPLE_RECORD:
                 self.__push(record - START_EXAMPLE_RECORD)
@@ -398,9 +373,6 @@ class ExampleProperty:
         """Called at the end of each example, with ``i`` the
         index of the example and ``discarded`` being ``True`` if ``stop_example``
         was called with ``discard=True``."""
-
-    def ir_node(self, node: "IRNode") -> None:
-        """Called when an ir node is drawn."""
 
     def finish(self) -> Any:
         return self.result
@@ -457,23 +429,8 @@ class ExampleRecord:
     def freeze(self) -> None:
         self.__index_of_labels = None
 
-    def record_ir_draw(
-        self,
-        ir_type: IRTypeName,
-        value: IRType,
-        *,
-        kwargs: IRKWargsType,
-        was_forced: bool,
-    ) -> None:
+    def record_ir_draw(self) -> None:
         self.trail.append(IR_NODE_RECORD)
-        node = IRNode(
-            ir_type=ir_type,
-            value=value,
-            kwargs=kwargs,
-            was_forced=was_forced,
-            index=len(self.ir_nodes),
-        )
-        self.ir_nodes.append(node)
 
     def start_example(self, label: int) -> None:
         assert self.__index_of_labels is not None
@@ -507,7 +464,6 @@ class Examples:
 
     def __init__(self, record: ExampleRecord, blocks: "Blocks") -> None:
         self.trail = record.trail
-        self.ir_nodes = record.ir_nodes
         self.labels = record.labels
         self.__length = self.trail.count(
             STOP_EXAMPLE_DISCARD_RECORD
@@ -569,7 +525,7 @@ class Examples:
 
     class _discarded(ExampleProperty):
         def begin(self) -> None:
-            self.result: "set[int]" = set()
+            self.result: set[int] = set()
 
         def finish(self) -> frozenset[int]:
             return frozenset(self.result)
@@ -583,7 +539,7 @@ class Examples:
     class _trivial(ExampleProperty):
         def begin(self) -> None:
             self.nontrivial = IntList.of_length(len(self.examples))
-            self.result: "set[int]" = set()
+            self.result: set[int] = set()
 
         def block(self, i: int) -> None:
             if not self.examples.blocks.trivial(i):
@@ -616,15 +572,6 @@ class Examples:
             self.result[i] = len(self.example_stack)
 
     depths: IntList = calculated_example_property(_depths)
-
-    class _ir_tree_nodes(ExampleProperty):
-        def begin(self) -> None:
-            self.result = []
-
-        def ir_node(self, ir_node: "IRNode") -> None:
-            self.result.append(ir_node)
-
-    ir_tree_nodes: "list[IRNode]" = calculated_example_property(_ir_tree_nodes)
 
     class _label_indices(ExampleProperty):
         def start_example(self, i: int, label_index: int) -> None:
@@ -742,7 +689,7 @@ class Blocks:
     be preferred to using the Block objects directly, as it will not
     have to allocate the actual object."""
 
-    __slots__ = ("endpoints", "owner", "__blocks", "__count", "__sparse")
+    __slots__ = ("__blocks", "__count", "__sparse", "endpoints", "owner")
     owner: "Union[ConjectureData, ConjectureResult, None]"
     __blocks: Union[dict[int, Block], list[Optional[Block]]]
 
@@ -896,7 +843,7 @@ class Blocks:
 
 
 class _Overrun:
-    status = Status.OVERRUN
+    status: Status = Status.OVERRUN
 
     def __repr__(self) -> str:
         return "Overrun"
@@ -957,21 +904,22 @@ class DataObserver:
 
 @attr.s(slots=True, repr=False, eq=False)
 class IRNode:
-    ir_type: IRTypeName = attr.ib()
-    value: IRType = attr.ib()
-    kwargs: IRKWargsType = attr.ib()
+    ir_type: ChoiceNameT = attr.ib()
+    value: ChoiceT = attr.ib()
+    kwargs: ChoiceKwargsT = attr.ib()
     was_forced: bool = attr.ib()
     index: Optional[int] = attr.ib(default=None)
 
     def copy(
         self,
         *,
-        with_value: Optional[IRType] = None,
-        with_kwargs: Optional[IRKWargsType] = None,
+        with_value: Optional[ChoiceT] = None,
+        with_kwargs: Optional[ChoiceKwargsT] = None,
     ) -> "IRNode":
         # we may want to allow this combination in the future, but for now it's
         # a footgun.
-        assert not self.was_forced, "modifying a forced node doesn't make sense"
+        if self.was_forced:
+            assert with_value is None, "modifying a forced node doesn't make sense"
         # explicitly not copying index. node indices are only assigned via
         # ExampleRecord. This prevents footguns with relying on stale indices
         # after copying.
@@ -983,7 +931,7 @@ class IRNode:
         )
 
     @property
-    def trivial(self):
+    def trivial(self) -> bool:
         """
         A node is trivial if it cannot be simplified any further. This does not
         mean that modifying a trivial node can't produce simpler test cases when
@@ -993,20 +941,13 @@ class IRNode:
         if self.was_forced:
             return True
 
-        if self.ir_type == "integer":
-            shrink_towards = self.kwargs["shrink_towards"]
-            min_value = self.kwargs["min_value"]
-            max_value = self.kwargs["max_value"]
-
-            if min_value is not None:
-                shrink_towards = max(min_value, shrink_towards)
-            if max_value is not None:
-                shrink_towards = min(max_value, shrink_towards)
-
-            return self.value == shrink_towards
-        if self.ir_type == "float":
-            min_value = self.kwargs["min_value"]
-            max_value = self.kwargs["max_value"]
+        if self.ir_type != "float":
+            zero_value = choice_from_index(0, self.ir_type, self.kwargs)
+            return ir_value_equal(self.ir_type, self.value, zero_value)
+        else:
+            kwargs = cast(FloatKWargs, self.kwargs)
+            min_value = kwargs["min_value"]
+            max_value = kwargs["max_value"]
             shrink_towards = 0
 
             if min_value == -math.inf and max_value == math.inf:
@@ -1028,19 +969,8 @@ class IRNode:
             # It would be good to compute this correctly in the future, but it's
             # also not incorrect to be conservative here.
             return False
-        if self.ir_type == "boolean":
-            return self.value is False
-        if self.ir_type == "string":
-            # smallest size and contains only the smallest-in-shrink-order character.
-            minimal_char = self.kwargs["intervals"].char_in_shrink_order(0)
-            return self.value == (minimal_char * self.kwargs["min_size"])
-        if self.ir_type == "bytes":
-            # smallest size and all-zero value.
-            return len(self.value) == self.kwargs["min_size"] and not any(self.value)
 
-        raise NotImplementedError(f"unhandled ir_type {self.ir_type}")
-
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if not isinstance(other, IRNode):
             return NotImplemented
 
@@ -1067,45 +997,29 @@ class IRNode:
         return f"{self.ir_type} {self.value!r}{forced_marker} {self.kwargs!r}"
 
 
-def ir_value_permitted(value, ir_type, kwargs):
-    if ir_type == "integer":
-        min_value = kwargs["min_value"]
-        max_value = kwargs["max_value"]
-        shrink_towards = kwargs["shrink_towards"]
-        if min_value is not None and value < min_value:
-            return False
-        if max_value is not None and value > max_value:
-            return False
+@attr.s(slots=True)
+class NodeTemplate:
+    type: Literal["simplest"] = attr.ib()
+    size: int = attr.ib()
 
-        if max_value is None or min_value is None:
-            return (value - shrink_towards).bit_length() < 128
+    def __attrs_post_init__(self) -> None:
+        assert self.size > 0
 
-        return True
-    elif ir_type == "float":
-        if math.isnan(value):
-            return kwargs["allow_nan"]
-        return (
-            sign_aware_lte(kwargs["min_value"], value)
-            and sign_aware_lte(value, kwargs["max_value"])
-        ) and not (0 < abs(value) < kwargs["smallest_nonzero_magnitude"])
-    elif ir_type == "string":
-        if len(value) < kwargs["min_size"]:
-            return False
-        if kwargs["max_size"] is not None and len(value) > kwargs["max_size"]:
-            return False
-        return all(ord(c) in kwargs["intervals"] for c in value)
-    elif ir_type == "bytes":
-        if len(value) < kwargs["min_size"]:
-            return False
-        return kwargs["max_size"] is None or len(value) <= kwargs["max_size"]
-    elif ir_type == "boolean":
-        if kwargs["p"] <= 2 ** (-64):
-            return value is False
-        if kwargs["p"] >= (1 - 2 ** (-64)):
-            return value is True
-        return True
 
-    raise NotImplementedError(f"unhandled type {type(value)} of ir value {value}")
+def ir_size(ir: Iterable[Union[IRNode, NodeTemplate, ChoiceT]]) -> int:
+    from hypothesis.database import ir_to_bytes
+
+    size = 0
+    for v in ir:
+        if isinstance(v, IRNode):
+            size += len(ir_to_bytes([v.value]))
+        elif isinstance(v, NodeTemplate):
+            size += v.size
+        else:
+            # ChoiceT
+            size += len(ir_to_bytes([v]))
+
+    return size
 
 
 def ir_value_key(ir_type, v):
@@ -1159,6 +1073,7 @@ class ConjectureResult:
     # If we consider blocks or examples in equality checks, multiple semantically equal
     # results get stored in e.g. the pareto front.
     blocks: Blocks = attr.ib(eq=False)
+    ir_nodes: tuple[IRNode, ...] = attr.ib(eq=False, repr=False)
     output: str = attr.ib()
     extra_information: Optional[ExtraInformation] = attr.ib()
     has_discards: bool = attr.ib()
@@ -1178,6 +1093,10 @@ class ConjectureResult:
 
     def as_result(self) -> "ConjectureResult":
         return self
+
+    @property
+    def choices(self) -> tuple[ChoiceT, ...]:
+        return tuple(node.value for node in self.ir_nodes)
 
 
 # Masks for masking off the first byte of an n-bit buffer.
@@ -1287,7 +1206,7 @@ class PrimitiveProvider(abc.ABC):
         max_value: Optional[int] = None,
         *,
         # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[dict[int, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
@@ -1333,6 +1252,27 @@ class PrimitiveProvider(abc.ABC):
         fake_forced: bool = False,
     ) -> bytes:
         raise NotImplementedError
+
+    def span_start(self, label: int, /) -> None:  # noqa: B027  # non-abstract noop
+        """Marks the beginning of a semantically meaningful span.
+
+        Providers can optionally track this data to learn which sub-sequences
+        of draws correspond to a higher-level object, recovering the parse tree.
+        `label` is an opaque integer, which will be shared by all spans drawn
+        from a particular strategy.
+
+        This method is called from ConjectureData.start_example().
+        """
+
+    def span_end(self, discard: bool, /) -> None:  # noqa: B027  # non-abstract noop
+        """Marks the end of a semantically meaningful span.
+
+        `discard` is True when the draw was filtered out or otherwise marked as
+        unlikely to contribute to the input data as seen by the user's test.
+        Note however that side effects can make this determination unsound.
+
+        This method is called from ConjectureData.stop_example().
+        """
 
 
 class HypothesisProvider(PrimitiveProvider):
@@ -1456,8 +1396,7 @@ class HypothesisProvider(PrimitiveProvider):
         min_value: Optional[int] = None,
         max_value: Optional[int] = None,
         *,
-        # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[dict[int, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
@@ -1475,22 +1414,31 @@ class HypothesisProvider(PrimitiveProvider):
             assert min_value is not None
             assert max_value is not None
 
-            sampler = Sampler(weights, observe=False)
-            gap = max_value - shrink_towards
+            # format of weights is a mapping of ints to p, where sum(p) < 1.
+            # The remaining probability mass is uniformly distributed over
+            # *all* ints (not just the unmapped ones; this is somewhat undesirable,
+            # but simplifies things).
+            #
+            # We assert that sum(p) is strictly less than 1 because it simplifies
+            # handling forced values when we can force into the unmapped probability
+            # mass. We should eventually remove this restriction.
+            sampler = Sampler(
+                [1 - sum(weights.values()), *weights.values()], observe=False
+            )
+            # if we're forcing, it's easiest to force into the unmapped probability
+            # mass and then force the drawn value after.
+            idx = sampler.sample(
+                self._cd, forced=None if forced is None else 0, fake_forced=fake_forced
+            )
 
-            forced_idx = None
-            if forced is not None:
-                if forced >= shrink_towards:
-                    forced_idx = forced - shrink_towards
-                else:
-                    forced_idx = shrink_towards + gap - forced
-            idx = sampler.sample(self._cd, forced=forced_idx, fake_forced=fake_forced)
-
-            # For range -2..2, interpret idx = 0..4 as [0, 1, 2, -1, -2]
-            if idx <= gap:
-                return shrink_towards + idx
-            else:
-                return shrink_towards - (idx - gap)
+            return self._draw_bounded_integer(
+                min_value,
+                max_value,
+                # implicit reliance on dicts being sorted for determinism
+                forced=forced if idx == 0 else list(weights)[idx - 1],
+                center=shrink_towards,
+                fake_forced=fake_forced,
+            )
 
         if min_value is None and max_value is None:
             return self._draw_unbounded_integer(forced=forced, fake_forced=fake_forced)
@@ -1540,8 +1488,7 @@ class HypothesisProvider(PrimitiveProvider):
         (
             sampler,
             forced_sign_bit,
-            neg_clamper,
-            pos_clamper,
+            clamper,
             nasty_floats,
         ) = self._draw_float_init_logic(
             min_value=min_value,
@@ -1572,12 +1519,8 @@ class HypothesisProvider(PrimitiveProvider):
                 )
                 if allow_nan and math.isnan(result):
                     clamped = result
-                elif math.copysign(1.0, result) == -1:
-                    assert neg_clamper is not None
-                    clamped = -neg_clamper(-result)
                 else:
-                    assert pos_clamper is not None
-                    clamped = pos_clamper(result)
+                    clamped = clamper(result)
                 if clamped != result and not (math.isnan(result) and allow_nan):
                     self._draw_float(forced=clamped, fake_forced=fake_forced)
                     result = clamped
@@ -1859,8 +1802,7 @@ class HypothesisProvider(PrimitiveProvider):
     ) -> tuple[
         Optional[Sampler],
         Optional[Literal[0, 1]],
-        Optional[Callable[[float], float]],
-        Optional[Callable[[float], float]],
+        Callable[[float], float],
         list[float],
     ]:
         """
@@ -1897,8 +1839,7 @@ class HypothesisProvider(PrimitiveProvider):
     ) -> tuple[
         Optional[Sampler],
         Optional[Literal[0, 1]],
-        Optional[Callable[[float], float]],
-        Optional[Callable[[float], float]],
+        Callable[[float], float],
         list[float],
     ]:
         if smallest_nonzero_magnitude == 0.0:  # pragma: no cover
@@ -1930,23 +1871,17 @@ class HypothesisProvider(PrimitiveProvider):
         weights = [0.2 * len(nasty_floats)] + [0.8] * len(nasty_floats)
         sampler = Sampler(weights, observe=False) if nasty_floats else None
 
-        pos_clamper = neg_clamper = None
-        if sign_aware_lte(0.0, max_value):
-            pos_min = max(min_value, smallest_nonzero_magnitude)
-            allow_zero = sign_aware_lte(min_value, 0.0)
-            pos_clamper = make_float_clamper(pos_min, max_value, allow_zero=allow_zero)
-        if sign_aware_lte(min_value, -0.0):
-            neg_max = min(max_value, -smallest_nonzero_magnitude)
-            allow_zero = sign_aware_lte(-0.0, max_value)
-            neg_clamper = make_float_clamper(
-                -neg_max, -min_value, allow_zero=allow_zero
-            )
-
         forced_sign_bit: Optional[Literal[0, 1]] = None
-        if (pos_clamper is None) != (neg_clamper is None):
-            forced_sign_bit = 1 if neg_clamper else 0
+        if sign_aware_lte(min_value, -0.0) != sign_aware_lte(0.0, max_value):
+            forced_sign_bit = 1 if sign_aware_lte(min_value, -0.0) else 0
 
-        return (sampler, forced_sign_bit, neg_clamper, pos_clamper, nasty_floats)
+        clamper = make_float_clamper(
+            min_value,
+            max_value,
+            smallest_nonzero_magnitude=smallest_nonzero_magnitude,
+            allow_nan=allow_nan,
+        )
+        return (sampler, forced_sign_bit, clamper, nasty_floats)
 
 
 # The set of available `PrimitiveProvider`s, by name.  Other libraries, such as
@@ -1975,21 +1910,23 @@ class ConjectureData:
         )
 
     @classmethod
-    def for_ir_tree(
+    def for_choices(
         cls,
-        ir_tree_prefix: list[IRNode],
+        choices: Sequence[Union[NodeTemplate, ChoiceT]],
         *,
         observer: Optional[DataObserver] = None,
         provider: Union[type, PrimitiveProvider] = HypothesisProvider,
         max_length: Optional[int] = None,
+        random: Optional[Random] = None,
     ) -> "ConjectureData":
         from hypothesis.internal.conjecture.engine import BUFFER_SIZE
 
         return cls(
-            max_length=BUFFER_SIZE if max_length is None else max_length,
+            max_length=BUFFER_SIZE,
+            max_length_ir=(ir_size(choices) if max_length is None else max_length),
             prefix=b"",
-            random=None,
-            ir_tree_prefix=ir_tree_prefix,
+            random=random,
+            ir_prefix=choices,
             observer=observer,
             provider=provider,
         )
@@ -2002,25 +1939,31 @@ class ConjectureData:
         random: Optional[Random],
         observer: Optional[DataObserver] = None,
         provider: Union[type, PrimitiveProvider] = HypothesisProvider,
-        ir_tree_prefix: Optional[list[IRNode]] = None,
+        ir_prefix: Optional[Sequence[Union[NodeTemplate, ChoiceT]]] = None,
+        max_length_ir: Optional[int] = None,
     ) -> None:
+        from hypothesis.internal.conjecture.engine import BUFFER_SIZE_IR
+
         if observer is None:
             observer = DataObserver()
         assert isinstance(observer, DataObserver)
         self._bytes_drawn = 0
         self.observer = observer
         self.max_length = max_length
+        self.max_length_ir = BUFFER_SIZE_IR if max_length_ir is None else max_length_ir
         self.is_find = False
         self.overdraw = 0
         self.__prefix = bytes(prefix)
         self.__random = random
 
-        if ir_tree_prefix is None:
+        if ir_prefix is None:
             assert random is not None or max_length <= len(prefix)
 
         self.blocks = Blocks(self)
         self.buffer: "Union[bytes, bytearray]" = bytearray()
         self.index = 0
+        self.length_ir = 0
+        self.index_ir = 0
         self.output = ""
         self.status = Status.VALID
         self.frozen = False
@@ -2074,9 +2017,9 @@ class ConjectureData:
 
         self.extra_information = ExtraInformation()
 
-        self.ir_tree_nodes = ir_tree_prefix
+        self.ir_prefix = ir_prefix
+        self.ir_nodes: tuple[IRNode, ...] = ()
         self.misaligned_at: Optional[MisalignedAt] = None
-        self._node_index = 0
         self.start_example(TOP_LABEL)
 
     def __repr__(self) -> str:
@@ -2085,6 +2028,10 @@ class ConjectureData:
             len(self.buffer),
             ", frozen" if self.frozen else "",
         )
+
+    @property
+    def choices(self) -> tuple[ChoiceT, ...]:
+        return tuple(node.value for node in self.ir_nodes)
 
     # A bit of explanation of the `observe` and `fake_forced` arguments in our
     # draw_* functions.
@@ -2111,13 +2058,65 @@ class ConjectureData:
     # value to be returned, but we don't want to treat that block as fixed for
     # e.g. the shrinker.
 
+    def _draw(self, ir_type, kwargs, *, observe, forced, fake_forced):
+        # this is somewhat redundant with the length > max_length check at the
+        # end of the function, but avoids trying to use a null self.random when
+        # drawing past the node of a ConjectureData.for_choices data.
+        if self.length_ir == self.max_length_ir:
+            debug_report(f"overrun because hit {self.max_length_ir=}")
+            self.mark_overrun()
+
+        if self.ir_prefix is not None and observe:
+            if self.index_ir < len(self.ir_prefix):
+                choice = self._pop_choice(ir_type, kwargs, forced=forced)
+            else:
+                try:
+                    (choice, _buf) = ir_to_buffer(
+                        ir_type, kwargs, forced=forced, random=self.__random
+                    )
+                except StopTest:
+                    debug_report("overrun because ir_to_buffer overran")
+                    self.mark_overrun()
+
+            if forced is None:
+                forced = choice
+                fake_forced = True
+
+        value = getattr(self.provider, f"draw_{ir_type}")(
+            **kwargs, forced=forced, fake_forced=fake_forced
+        )
+
+        if observe:
+            was_forced = forced is not None and not fake_forced
+            getattr(self.observer, f"draw_{ir_type}")(
+                value, kwargs=kwargs, was_forced=was_forced
+            )
+            size = ir_size([value])
+            if self.length_ir + size > self.max_length_ir:
+                debug_report(
+                    f"overrun because {self.length_ir=} + {size=} > {self.max_length_ir=}"
+                )
+                self.mark_overrun()
+
+            node = IRNode(
+                ir_type=ir_type,
+                value=value,
+                kwargs=kwargs,
+                was_forced=was_forced,
+                index=len(self.ir_nodes),
+            )
+            self.__example_record.record_ir_draw()
+            self.ir_nodes += (node,)
+            self.length_ir += size
+
+        return value
+
     def draw_integer(
         self,
         min_value: Optional[int] = None,
         max_value: Optional[int] = None,
         *,
-        # weights are for choosing an element index from a bounded range
-        weights: Optional[Sequence[float]] = None,
+        weights: Optional[dict[int, float]] = None,
         shrink_towards: int = 0,
         forced: Optional[int] = None,
         fake_forced: bool = False,
@@ -2127,9 +2126,14 @@ class ConjectureData:
         if weights is not None:
             assert min_value is not None
             assert max_value is not None
-            width = max_value - min_value + 1
-            assert width <= 255  # arbitrary practical limit
-            assert len(weights) == width
+            assert len(weights) <= 255  # arbitrary practical limit
+            # We can and should eventually support total weights. But this
+            # complicates shrinking as we can no longer assume we can force
+            # a value to the unmapped probability mass if that mass might be 0.
+            assert sum(weights.values()) < 1
+            # similarly, things get simpler if we assume every value is possible.
+            # we'll want to drop this restriction eventually.
+            assert all(w != 0 for w in weights.values())
 
         if forced is not None and (min_value is None or max_value is None):
             # We draw `forced=forced - shrink_towards` here internally, after clamping.
@@ -2157,28 +2161,9 @@ class ConjectureData:
                 "shrink_towards": shrink_towards,
             },
         )
-
-        if self.ir_tree_nodes is not None and observe:
-            node_value = self._pop_ir_tree_node("integer", kwargs, forced=forced)
-            if forced is None:
-                assert isinstance(node_value, int)
-                forced = node_value
-                fake_forced = True
-
-        value = self.provider.draw_integer(
-            **kwargs, forced=forced, fake_forced=fake_forced
+        return self._draw(
+            "integer", kwargs, observe=observe, forced=forced, fake_forced=fake_forced
         )
-        if observe:
-            self.observer.draw_integer(
-                value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
-            )
-            self.__example_record.record_ir_draw(
-                "integer",
-                value,
-                kwargs=kwargs,
-                was_forced=forced is not None and not fake_forced,
-            )
-        return value
 
     def draw_float(
         self,
@@ -2214,28 +2199,9 @@ class ConjectureData:
                 "smallest_nonzero_magnitude": smallest_nonzero_magnitude,
             },
         )
-
-        if self.ir_tree_nodes is not None and observe:
-            node_value = self._pop_ir_tree_node("float", kwargs, forced=forced)
-            if forced is None:
-                assert isinstance(node_value, float)
-                forced = node_value
-                fake_forced = True
-
-        value = self.provider.draw_float(
-            **kwargs, forced=forced, fake_forced=fake_forced
+        return self._draw(
+            "float", kwargs, observe=observe, forced=forced, fake_forced=fake_forced
         )
-        if observe:
-            self.observer.draw_float(
-                value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
-            )
-            self.__example_record.record_ir_draw(
-                "float",
-                value,
-                kwargs=kwargs,
-                was_forced=forced is not None and not fake_forced,
-            )
-        return value
 
     def draw_string(
         self,
@@ -2258,27 +2224,9 @@ class ConjectureData:
                 "max_size": max_size,
             },
         )
-        if self.ir_tree_nodes is not None and observe:
-            node_value = self._pop_ir_tree_node("string", kwargs, forced=forced)
-            if forced is None:
-                assert isinstance(node_value, str)
-                forced = node_value
-                fake_forced = True
-
-        value = self.provider.draw_string(
-            **kwargs, forced=forced, fake_forced=fake_forced
+        return self._draw(
+            "string", kwargs, observe=observe, forced=forced, fake_forced=fake_forced
         )
-        if observe:
-            self.observer.draw_string(
-                value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
-            )
-            self.__example_record.record_ir_draw(
-                "string",
-                value,
-                kwargs=kwargs,
-                was_forced=forced is not None and not fake_forced,
-            )
-        return value
 
     def draw_bytes(
         self,
@@ -2295,28 +2243,9 @@ class ConjectureData:
         kwargs: BytesKWargs = self._pooled_kwargs(
             "bytes", {"min_size": min_size, "max_size": max_size}
         )
-
-        if self.ir_tree_nodes is not None and observe:
-            node_value = self._pop_ir_tree_node("bytes", kwargs, forced=forced)
-            if forced is None:
-                assert isinstance(node_value, bytes)
-                forced = node_value
-                fake_forced = True
-
-        value = self.provider.draw_bytes(
-            **kwargs, forced=forced, fake_forced=fake_forced
+        return self._draw(
+            "bytes", kwargs, observe=observe, forced=forced, fake_forced=fake_forced
         )
-        if observe:
-            self.observer.draw_bytes(
-                value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
-            )
-            self.__example_record.record_ir_draw(
-                "bytes",
-                value,
-                kwargs=kwargs,
-                was_forced=forced is not None and not fake_forced,
-            )
-        return value
 
     def draw_boolean(
         self,
@@ -2336,28 +2265,9 @@ class ConjectureData:
         assert (forced is not False) or p < (1 - eps)
 
         kwargs: BooleanKWargs = self._pooled_kwargs("boolean", {"p": p})
-
-        if self.ir_tree_nodes is not None and observe:
-            node_value = self._pop_ir_tree_node("boolean", kwargs, forced=forced)
-            if forced is None:
-                assert isinstance(node_value, bool)
-                forced = node_value
-                fake_forced = True
-
-        value = self.provider.draw_boolean(
-            **kwargs, forced=forced, fake_forced=fake_forced
+        return self._draw(
+            "boolean", kwargs, observe=observe, forced=forced, fake_forced=fake_forced
         )
-        if observe:
-            self.observer.draw_boolean(
-                value, kwargs=kwargs, was_forced=forced is not None and not fake_forced
-            )
-            self.__example_record.record_ir_draw(
-                "boolean",
-                value,
-                kwargs=kwargs,
-                was_forced=forced is not None and not fake_forced,
-            )
-        return value
 
     def _pooled_kwargs(self, ir_type, kwargs):
         """Memoize common dictionary objects to reduce memory pressure."""
@@ -2365,77 +2275,93 @@ class ConjectureData:
         if self.provider.avoid_realization:
             return kwargs
 
-        key = []
-        for k, v in kwargs.items():
-            if ir_type == "float" and k in ["min_value", "max_value"]:
-                # handle -0.0 vs 0.0, etc.
-                v = float_to_int(v)
-            elif ir_type == "integer" and k == "weights":
-                # make hashable
-                v = v if v is None else tuple(v)
-            key.append((k, v))
-
-        key = (ir_type, *sorted(key))
-
+        key = (ir_type, *ir_kwargs_key(ir_type, kwargs))
         try:
             return POOLED_KWARGS_CACHE[key]
         except KeyError:
             POOLED_KWARGS_CACHE[key] = kwargs
             return kwargs
 
-    def _pop_ir_tree_node(
-        self, ir_type: IRTypeName, kwargs: IRKWargsType, *, forced: Optional[IRType]
-    ) -> IRType:
-        from hypothesis.internal.conjecture.engine import BUFFER_SIZE
+    def _pop_choice(
+        self, ir_type: ChoiceNameT, kwargs: ChoiceKwargsT, *, forced: Optional[ChoiceT]
+    ) -> ChoiceT:
+        assert self.ir_prefix is not None
+        # checked in _draw
+        assert self.index_ir < len(self.ir_prefix)
 
-        assert self.ir_tree_nodes is not None
+        value = self.ir_prefix[self.index_ir]
+        if isinstance(value, NodeTemplate):
+            node: NodeTemplate = value
+            assert node.size >= 0
+            # node templates have to be at the end for now, since it's not immediately
+            # apparent how to handle overruning a node template while generating a single
+            # node if the alternative is not "the entire data is an overrun".
+            assert self.index_ir == len(self.ir_prefix) - 1
+            if node.type == "simplest":
+                try:
+                    choice: ChoiceT = choice_from_index(0, ir_type, kwargs)
+                except ChoiceTooLarge:
+                    self.mark_overrun()
+            else:
+                raise NotImplementedError
 
-        if self._node_index == len(self.ir_tree_nodes):
-            self.mark_overrun()
+            node.size -= ir_size([choice])
+            if node.size < 0:
+                self.mark_overrun()
+            return choice
 
-        node = self.ir_tree_nodes[self._node_index]
-        value = node.value
+        choice = value
+        node_ir_type = {
+            str: "string",
+            float: "float",
+            int: "integer",
+            bool: "boolean",
+            bytes: "bytes",
+        }[type(choice)]
         # If we're trying to:
         # * draw a different ir type at the same location
-        # * draw the same ir type with a different kwargs
+        # * draw the same ir type with a different kwargs, which does not permit
+        #   the current value
         #
         # then we call this a misalignment, because the choice sequence has
         # slipped from what we expected at some point. An easy misalignment is
         #
-        #   st.one_of(st.integers(0, 100), st.integers(101, 200))
+        #   one_of(integers(0, 100), integers(101, 200))
         #
         # where the choice sequence [0, 100] has kwargs {min_value: 0, max_value: 100}
-        # at position 2, but [0, 101] has kwargs {min_value: 101, max_value: 200} at
-        # position 2.
+        # at index 1, but [0, 101] has kwargs {min_value: 101, max_value: 200} at
+        # index 1 (which does not permit any of the values 0-100).
         #
-        # When we see a misalignment, we can't offer up the stored node value as-is.
-        # We need to make it appropriate for the requested kwargs and ir type.
-        # Right now we do that by using bytes as the intermediary to convert between
-        # ir types/kwargs. In the future we'll probably use the index into a custom
-        # ordering for an (ir_type, kwargs) pair.
-        if node.ir_type != ir_type or not ir_value_permitted(
-            node.value, node.ir_type, kwargs
-        ):
+        # When the choice sequence becomes misaligned, we generate a new value of the
+        # type and kwargs the strategy expects.
+        if node_ir_type != ir_type or not choice_permitted(choice, kwargs):
             # only track first misalignment for now.
             if self.misaligned_at is None:
-                self.misaligned_at = (self._node_index, ir_type, kwargs, forced)
-            (_value, buffer) = ir_to_buffer(
-                node.ir_type, node.kwargs, forced=node.value
-            )
+                self.misaligned_at = (self.index_ir, ir_type, kwargs, forced)
             try:
-                value = buffer_to_ir(
-                    ir_type, kwargs, buffer=buffer + bytes(BUFFER_SIZE - len(buffer))
-                )
-            except StopTest:
-                # must have been an overrun.
+                # Fill in any misalignments with index 0 choices. An alternative to
+                # this is using the index of the misaligned choice instead
+                # of index 0, which may be useful for maintaining
+                # "similarly-complex choices" in the shrinker. This requires
+                # attaching an index to every choice in ConjectureData.for_choices,
+                # which we don't always have (e.g. when reading from db).
                 #
-                # maybe we should fall back to to an arbitrary small value here
-                # instead? eg
-                #   buffer_to_ir(ir_type, kwargs, buffer=bytes(BUFFER_SIZE))
+                # If we really wanted this in the future we could make this complexity
+                # optional, use it if present, and default to index 0 otherwise.
+                # This complicates our internal api and so I'd like to avoid it
+                # if possible.
+                #
+                # Additionally, I don't think slips which require
+                # slipping to high-complexity values are common. Though arguably
+                # we may want to expand a bit beyond *just* the simplest choice.
+                # (we could for example consider sampling choices from index 0-10).
+                choice = choice_from_index(0, ir_type, kwargs)
+            except ChoiceTooLarge:
+                # should really never happen with a 0-index choice, but let's be safe.
                 self.mark_overrun()
 
-        self._node_index += 1
-        return value
+        self.index_ir += 1
+        return choice
 
     def as_result(self) -> Union[ConjectureResult, _Overrun]:
         """Convert the result of running this test into
@@ -2450,6 +2376,7 @@ class ConjectureData:
                 interesting_origin=self.interesting_origin,
                 buffer=self.buffer,
                 examples=self.examples,
+                ir_nodes=self.ir_nodes,
                 blocks=self.blocks,
                 output=self.output,
                 extra_information=(
@@ -2485,6 +2412,9 @@ class ConjectureData:
         label: Optional[int] = None,
         observe_as: Optional[str] = None,
     ) -> "Ex":
+        from hypothesis.internal.observability import TESTCASE_CALLBACKS
+        from hypothesis.strategies._internal.utils import to_jsonable
+
         if self.is_find and not strategy.supports_find:
             raise InvalidArgument(
                 f"Cannot use strategy {strategy!r} within a call to find "
@@ -2521,19 +2451,26 @@ class ConjectureData:
             try:
                 strategy.validate()
                 try:
-                    return strategy.do_draw(self)
+                    v = strategy.do_draw(self)
                 finally:
                     # Subtract the time spent in GC to avoid overcounting, as it is
                     # accounted for at the overall example level.
                     in_gctime = gc_cumulative_time() - gc_start_time
                     self.draw_times[key] = time.perf_counter() - start_time - in_gctime
             except Exception as err:
-                add_note(err, f"while generating {key[9:]!r} from {strategy!r}")
+                add_note(
+                    err,
+                    f"while generating {key.removeprefix('generate:')!r} from {strategy!r}",
+                )
                 raise
+            if TESTCASE_CALLBACKS:
+                self._observability_args[key] = to_jsonable(v)
+            return v
         finally:
             self.stop_example()
 
     def start_example(self, label: int) -> None:
+        self.provider.span_start(label)
         self.__assert_not_frozen("start_example")
         self.depth += 1
         # Logically it would make sense for this to just be
@@ -2548,6 +2485,7 @@ class ConjectureData:
         self.labels_for_structure_stack.append({label})
 
     def stop_example(self, *, discard: bool = False) -> None:
+        self.provider.span_end(discard)
         if self.frozen:
             return
         if discard:
@@ -2737,8 +2675,3 @@ def ir_to_buffer(ir_type, kwargs, *, forced=None, random=None):
     )
     value = getattr(cd.provider, f"draw_{ir_type}")(**kwargs, forced=forced)
     return (value, cd.buffer)
-
-
-def buffer_to_ir(ir_type, kwargs, *, buffer):
-    cd = ConjectureData.for_buffer(buffer)
-    return getattr(cd.provider, f"draw_{ir_type}")(**kwargs)
