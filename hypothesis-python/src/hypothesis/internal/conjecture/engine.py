@@ -958,9 +958,10 @@ class ConjectureRunner:
         )
         if zero_data.status > Status.OVERRUN:
             assert isinstance(zero_data, ConjectureResult)
-            self.__data_cache.pin(
-                self._cache_key(zero_data.choices), zero_data.as_result()
-            )  # Pin forever
+            if not self.provider.avoid_realization:
+                self.__data_cache.pin(
+                    self._cache_key(zero_data.choices), zero_data.as_result()
+                )  # Pin forever
 
         if zero_data.status == Status.OVERRUN or (
             zero_data.status == Status.VALID
