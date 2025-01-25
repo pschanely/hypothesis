@@ -128,6 +128,14 @@ def _consistently_increment_time(monkeypatch):
     def _patch(name, fn):
         monkeypatch.setattr(time_module, name, wraps(getattr(time_module, name))(fn))
 
+    # crosshair needs actual time for its path timeouts; load it before patching
+    try:
+        from hypothesis_crosshair_provider import crosshair_provider_test
+
+        assert crosshair_provider_test  # look, we just wanted the side effects...
+    except ImportError:
+        pass
+
     _patch("time", time)
     _patch("monotonic", time)
     _patch("perf_counter", time)
