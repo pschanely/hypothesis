@@ -123,13 +123,15 @@ def fresh_data(*, random=None, observer=None) -> ConjectureData:
         # fresh_data, so eh.
         random = context.data.draw(st.randoms())
 
-    return ConjectureData(
+    fresh_data = ConjectureData(
         BUFFER_SIZE,
         prefix=b"",
         random=random,
         observer=observer,
     )
-
+    # This seems to help with test_ir_nodes_roundtrips()
+    fresh_data.provider.avoid_realization = context.data.provider.avoid_realization
+    return fresh_data
 
 def clamped_shrink_towards(kwargs):
     v = kwargs["shrink_towards"]
