@@ -94,6 +94,7 @@ def warns_or_raises(request):
     else:
         return pytest.warns
 
+
 # crosshair needs actual time for its path timeouts; load it before patching
 try:
     from crosshair.util import CrossHairInternal
@@ -110,6 +111,7 @@ else:
             yield
         except CrossHairInternal:
             pytest.xfail("terrible temporary hack")
+
 
 @pytest.fixture(scope="function", autouse=True)
 def _consistently_increment_time(monkeypatch):
