@@ -491,8 +491,8 @@ class ConjectureRunner:
         finally:
             # No branch, because if we're interrupted we always raise
             # the KeyboardInterrupt, never continue to the code below.
+            data.freeze()
             if not interrupted:  # pragma: no branch
-                data.freeze()
                 call_stats: CallStats = {
                     "status": data.status.name.lower(),
                     "runtime": data.finish_time - data.start_time,
