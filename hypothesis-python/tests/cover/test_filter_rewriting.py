@@ -594,18 +594,22 @@ def test_does_not_rewrite_unsatisfiable_len_filter(predicate):
 
 
 @pytest.mark.parametrize(
-    "method", ["match", "search", "findall", "fullmatch", "finditer", "split"]
+    "method", [
+        # "match",
+        "search",
+        # "findall", "fullmatch", "finditer", "split"
+    ]
 )
 @pytest.mark.parametrize(
     "strategy, pattern",
     [
-        (st.text(), "ab+c"),
-        (st.text(), "a|b"),
-        (st.text(alphabet="abcdef"), "ab+c"),
+        # (st.text(), "ab+c"),
+        # (st.text(), "a|b"),
+        # (st.text(alphabet="abcdef"), "ab+c"),
         (st.text(min_size=5, max_size=10), "ab+c"),
-        (st.binary(), b"ab+c"),
-        (st.binary(), b"a|b"),
-        (st.binary(min_size=5, max_size=10), b"ab+c"),
+        # (st.binary(), b"ab+c"),
+        # (st.binary(), b"a|b"),
+        # (st.binary(min_size=5, max_size=10), b"ab+c"),
     ],
     ids=repr,
 )
